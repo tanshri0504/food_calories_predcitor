@@ -1,42 +1,47 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import datetime
 
 # Safe import
 try:
     from sklearn.linear_model import LinearRegression
 except:
-    st.error("⚠️ scikit-learn is not installed. Please add it in requirements.txt")
+    st.error("⚠️ scikit-learn is not installed. Add it to requirements.txt")
     st.stop()
 
+# PDF
+from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
+
 # ---------------- CONFIG ----------------
-st.set_page_config(page_title="AI Food Calorie Predictor Pro+", layout="wide")
+st.set_page_config(page_title="AI Nutrition Analyzer Pro++", layout="wide")
 
 # ---------------- THEME ----------------
 theme = st.sidebar.toggle("🌙 Dark Mode")
-
 if theme:
-    st.markdown(
-        "<style>body{background-color:#0E1117;color:white;}</style>",
-        unsafe_allow_html=True
-    )
+    st.markdown("<style>body{background-color:#0E1117;color:white;}</style>", unsafe_allow_html=True)
 
 # ---------------- TITLE ----------------
-st.title("🍔 AI Food Calorie Predictor Pro+")
+st.title("🥗 AI Nutrition Analyzer Pro++")
 
-# ---------------- DATASET ----------------
+# ---------------- DATA ----------------
 data = {
-    "Food": ["Rice","Rice","Chapati","Chapati","Apple","Apple",
-             "Banana","Banana","Milk","Milk","Egg","Egg",
-             "Chicken","Chicken"],
-    "Quantity": [100,200,1,2,1,2,1,2,100,200,1,2,100,200],
-    "Calories": [130,260,120,240,95,190,105,210,42,84,78,156,239,478]
+    "Food": ["Rice","Chapati","Apple","Banana","Milk","Egg","Chicken","Paneer","Bread","Dal"],
+    "Calories_per_unit": [130,120,95,105,42,78,239,265,80,150]
 }
-
 df = pd.DataFrame(data)
 
-# ---------------- MODEL TRAINING ----------------
-df_encoded = pd.get_dummies(df, columns=["Food"])
+# ---------------- MODEL ----------------
+df_model = pd.DataFrame({
+    "Quantity": np.tile([1,2,3,4], len(df)),
+    "Food": np.repeat(df["Food"], 4),
+})
+df_model["Calories"] = df_model.apply(
+    lambda x: x["Quantity"] * df[df["Food"] == x["Food"]]["Calories_per_unit"].values[0], axis=1
+)
+
+df_encoded = pd.get_dummies(df_model, columns=["Food"])
 X = df_encoded.drop("Calories", axis=1)
 y = df_encoded["Calories"]
 
@@ -44,74 +49,120 @@ model = LinearRegression()
 model.fit(X, y)
 
 # ---------------- FUNCTIONS ----------------
-def predict_calories(food, quantity):
+def predict(food, qty):
     input_data = pd.DataFrame(np.zeros((1, len(X.columns))), columns=X.columns)
-    input_data["Quantity"] = quantity
+    input_data["Quantity"] = qty
+    input_data[f"Food_{food}"] = 1
+    return round(model.predict(input_data)[0], 2)
 
-    if "Food_" + food in input_data.columns:
-        input_data["Food_" + food] = 1
+def bmi(weight, height):
+    return round(weight / (height/100)**2, 2)
 
-    prediction = model.predict(input_data)[0]
-    return round(prediction, 2)
-
-def health_suggestion(calories):
-    if calories > 400:
-        return "⚠️ Very High Calories", "warning"
-    elif calories > 250:
-        return "⚠️ Moderate Calories", "warning"
+def bmi_status(b):
+    if b < 18.5:
+        return "Underweight"
+    elif b < 25:
+        return "Normal"
+    elif b < 30:
+        return "Overweight"
     else:
-        return "✅ Healthy Choice", "success"
+        return "Obese"
+
+def diet_suggestion(cal):
+    if cal > 500:
+        return "⚠️ Reduce fried foods, add salad"
+    elif cal > 300:
+        return "⚠️ Balanced but control portion"
+    else:
+        return "✅ Healthy diet"
+
+def generate_pdf(name, cal, bmi_val):
+    doc = SimpleDocTemplate("nutrition_report.pdf")
+    styles = getSampleStyleSheet()
+    content = []
+
+    content.append(Paragraph(f"Name: {name}", styles["Normal"]))
+    content.append(Paragraph(f"Calories: {cal}", styles["Normal"]))
+    content.append(Paragraph(f"BMI: {bmi_val}", styles["Normal"]))
+
+    doc.build(content)
+
+# ---------------- SESSION STATE ----------------
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 # ---------------- INPUT ----------------
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("🍽️ Food Input")
-    food = st.selectbox("Select Food", df["Food"].unique())
-    quantity = st.slider("Quantity", 1, 300, 100)
+    name = st.text_input("Enter Name")
+    food = st.selectbox("Select Food", df["Food"])
+    qty = st.slider("Quantity", 1, 5, 1)
+
+    st.subheader("⚖️ Body Details")
+    weight = st.number_input("Weight (kg)", 30, 150, 60)
+    height = st.number_input("Height (cm)", 100, 220, 165)
 
 with col2:
-    st.subheader("📊 Prediction Result")
+    st.subheader("📊 Results")
 
-    if st.button("Predict Calories"):
-        calories = predict_calories(food, quantity)
-        suggestion, status = health_suggestion(calories)
+    if st.button("Analyze Now"):
+        calories = predict(food, qty)
+        bmi_val = bmi(weight, height)
+        status = bmi_status(bmi_val)
+
+        # Save history
+        st.session_state.history.append({
+            "Time": datetime.datetime.now(),
+            "Food": food,
+            "Calories": calories
+        })
 
         # -------- METRICS --------
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         c1.metric("🔥 Calories", f"{calories} kcal")
-        c2.metric("🍽️ Quantity", quantity)
+        c2.metric("⚖️ BMI", bmi_val)
+        c3.metric("📌 Status", status)
 
-        # -------- RESULT --------
-        if status == "warning":
-            st.warning(suggestion)
-        else:
-            st.success(suggestion)
+        # -------- SUGGESTION --------
+        st.subheader("💡 Diet Suggestion")
+        st.info(diet_suggestion(calories))
 
         # -------- CHART --------
-        st.subheader("📊 Calorie Visualization")
+        st.subheader("📈 Nutrition Chart")
         chart_df = pd.DataFrame({
-            "Type": ["Calories"],
-            "Value": [calories]
+            "Metric": ["Calories","BMI"],
+            "Value": [calories, bmi_val]
         })
-        st.bar_chart(chart_df.set_index("Type"))
+        st.bar_chart(chart_df.set_index("Metric"))
 
-# ---------------- DATASET VIEW ----------------
-st.subheader("📋 Dataset Preview")
-st.dataframe(df)
+        # -------- PDF --------
+        generate_pdf(name, calories, bmi_val)
+        with open("nutrition_report.pdf", "rb") as f:
+            st.download_button("📄 Download Report", f, "nutrition_report.pdf")
 
-# ---------------- INSIGHTS ----------------
-st.subheader("📌 Smart Insights")
+# ---------------- HISTORY ----------------
+st.subheader("📜 History Tracker")
 
-avg_cal = df["Calories"].mean()
-max_cal = df["Calories"].max()
+if st.session_state.history:
+    hist_df = pd.DataFrame(st.session_state.history)
+    st.dataframe(hist_df)
 
-st.write(f"📊 Average Calories: **{round(avg_cal,2)} kcal**")
-st.write(f"🔥 Highest Calories Food: **{df.loc[df['Calories'].idxmax(),'Food']}** ({max_cal} kcal)")
+    st.line_chart(hist_df.set_index("Time")["Calories"])
+else:
+    st.info("No history yet")
 
-# ---------------- TIPS ----------------
-st.subheader("💡 Health Tips")
+# ---------------- ANALYTICS ----------------
+st.subheader("📊 Food Analytics")
 
-st.info("🥗 Prefer fruits and low-calorie foods daily")
-st.info("🏃 Exercise regularly to balance calorie intake")
-st.info("💧 Drink enough water")
+avg = hist_df["Calories"].mean() if st.session_state.history else 0
+st.write(f"📊 Average Calories: {round(avg,2)}")
+
+# ---------------- EXTRA ----------------
+st.subheader("🚀 Pro Features")
+st.success("✔ ML Prediction")
+st.success("✔ BMI Calculator")
+st.success("✔ Diet Suggestions")
+st.success("✔ History Tracking")
+st.success("✔ PDF Report")
